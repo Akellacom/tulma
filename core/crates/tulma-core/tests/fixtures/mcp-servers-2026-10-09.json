@@ -1,0 +1,184 @@
+{
+  "mcpServers": {
+    "youtrack": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://youtrack.example.com/mcp",
+        "--header",
+        "Authorization:${AUTH_HEADER}"
+      ],
+      "env": {
+        "AUTH_HEADER": "Bearer "
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/akellacom/www",
+        "/Users/akellacom/flutter"
+      ],
+      "env": {}
+    },
+    "figma": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://127.0.0.1:3845/mcp"
+      ],
+      "env": {}
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+      }
+    },
+    "mempalace": {
+      "command": "/opt/homebrew/bin/python3.11",
+      "args": [
+        "-m",
+        "mempalace.mcp_server"
+      ],
+      "env": {}
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "env": {
+        "MEMORY_FILE_PATH": "/Users/akellacom/.mcp/memory-graph.json"
+      }
+    },
+    "git": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-git"
+      ],
+      "env": {}
+    },
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "env": {}
+    },
+    "static-app": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp.static.app/sse",
+        "--header",
+        "Authorization: Bearer ${AUTH_HEADER}"
+      ],
+      "env": {
+        "AUTH_HEADER": ""
+      }
+    },
+    "mdn": {
+      "command": "",
+      "args": [],
+      "env": {}
+    },
+    "exa": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "exa-mcp-server",
+        "tools=get_code_context_exa,web_search_exa"
+      ],
+      "env": {
+        "EXA_API_KEY": ""
+      }
+    },
+    "pencil": {
+      "command": "/Applications/Pencil.app/Contents/Resources/app.asar.unpacked/out/mcp-server-darwin-arm64",
+      "args": [
+        "--app",
+        "desktop"
+      ],
+      "env": {}
+    },
+    "postcards-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://postcards.example.com/mcp",
+        "--transport",
+        "http-only",
+        "--header",
+        "Authorization:${AUTH}"
+      ],
+      "env": {
+        "AUTH": "Bearer sk-pcds-api03-"
+      }
+    },
+    "posthog": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote@latest",
+        "https://posthog.example.com/sse",
+        "--header",
+        "Authorization:Bearer "
+      ],
+      "env": {}
+    },
+    "helpscout": {
+      "command": "npx",
+      "args": [
+        "help-scout-mcp-server"
+      ],
+      "env": {
+        "HELPSCOUT_APP_ID": "",
+        "HELPSCOUT_APP_SECRET": "",
+        "HELPSCOUT_DEFAULT_INBOX_ID": "262697"
+      }
+    },
+    "mdgate": {
+      "command": "",
+      "args": [],
+      "env": {}
+    },
+    "ahrefs": {
+      "command": "",
+      "args": [],
+      "env": {}
+    },
+    "pocketalert": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp.pocketalert.app/mcp",
+        "--header",
+        "Authorization: Bearer ${POCKETALERT_API_TOKEN}"
+      ],
+      "env": {
+        "POCKETALERT_API_TOKEN": ""
+      }
+    },
+    "openpanel-2": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://stats.example.com/api/mcp?token===",
+        "--transport",
+        "http-only"
+      ],
+      "env": {}
+    }
+  }
+}

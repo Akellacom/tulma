@@ -1,0 +1,82 @@
+name: Tulma
+options:
+  bundleIdPrefix: app.tulma
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    ARCHS: arm64
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    DEAD_CODE_STRIPPING: YES
+targets:
+  Tulma:
+    type: application
+    platform: macOS
+    sources:
+      - path: Tulma
+        excludes:
+          - Resources/Info.plist
+      - path: core/target/release/tulma
+        optional: true
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Helpers
+        attributes: [CodeSignOnCopy]
+    info:
+      path: Tulma/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Tulma
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.developer-tools
+        LSMinimumSystemVersion: "15.0"
+        NSHumanReadableCopyright: ""
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.tulma.Tulma
+        PRODUCT_NAME: Tulma
+        ENABLE_HARDENED_RUNTIME: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: YES
+        GENERATE_INFOPLIST_FILE: NO
+    preBuildScripts:
+      - name: Build Rust core
+        basedOnDependencyAnalysis: false
+        script: |
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+          cd "$SRCROOT/core" && cargo build --release -p tulma
+        outputFiles:
+          - $(SRCROOT)/core/target/release/tulma
+  TulmaTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: TulmaTests
+      - path: Tulma/Daemon
+      - path: Tulma/Model
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.tulma.TulmaTests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+schemes:
+  Tulma:
+    build:
+      targets:
+        Tulma: all
+        TulmaTests: [test]
+    test:
+      targets: [TulmaTests]
+      environmentVariables:
+        TULMA_TEST_DAEMON: $(SRCROOT)/core/target/debug/tulma
+        TULMA_TEST_ECHO: $(SRCROOT)/core/target/debug/echo-server

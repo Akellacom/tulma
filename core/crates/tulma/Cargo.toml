@@ -1,0 +1,12 @@
+[package]
+name = "tulma"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tulma-core.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
