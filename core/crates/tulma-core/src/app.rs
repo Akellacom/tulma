@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -8,6 +8,7 @@ use arc_swap::ArcSwap;
 use rmcp::model::Tool;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, broadcast};
+use tokio::task::JoinHandle;
 
 use crate::catalog::{Catalog, CatalogInput, Fingerprints, exposed_name};
 use crate::events::Notification;
@@ -38,6 +39,8 @@ pub struct Tulma {
     pub(crate) http: tokio::sync::Mutex<Option<HttpHandle>>,
     pub(crate) endpoint: Mutex<EndpointInfo>,
     pub(crate) ops: tokio::sync::Mutex<()>,
+    pub(crate) sign_ins: Mutex<HashMap<ServerId, JoinHandle<()>>>,
+    pub registry: crate::registry::Registry,
     pending_lists: AtomicU8,
     lists_dirty: Notify,
     started: AtomicBool,
@@ -62,6 +65,9 @@ pub struct ServerInput {
     #[serde(default = "yes")]
     pub auto_restart: bool,
     pub transport: Transport,
+    /// Env/header keys to keep in the secret store even if their name does not look secret.
+    #[serde(default)]
+    pub secret_keys: BTreeSet<String>,
 }
 
 fn yes() -> bool {
@@ -102,6 +108,16 @@ pub enum TransportView {
         #[serde(default)]
         headers: Vec<KeyValue>,
     },
+}
+
+impl TransportView {
+    pub fn secret_keys(&self) -> BTreeSet<String> {
+        let pairs = match self {
+            TransportView::Stdio { env, .. } => env,
+            TransportView::Http { headers, .. } => headers,
+        };
+        pairs.iter().filter(|kv| kv.secret).map(|kv| kv.key.trim().to_string()).collect()
+    }
 }
 
 impl From<TransportView> for Transport {
@@ -149,6 +165,7 @@ pub struct ServerView {
     pub auto_restart: bool,
     pub transport: TransportView,
     pub disabled_tools: Vec<String>,
+    pub oauth: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -228,6 +245,8 @@ impl Tulma {
             http: tokio::sync::Mutex::new(None),
             endpoint: Mutex::new(EndpointInfo { port, ..Default::default() }),
             ops: tokio::sync::Mutex::new(()),
+            sign_ins: Mutex::new(HashMap::new()),
+            registry: crate::registry::Registry::new(),
             pending_lists: AtomicU8::new(0),
             lists_dirty: Notify::new(),
             started: AtomicBool::new(false),
@@ -367,6 +386,7 @@ impl Tulma {
             auto_restart: s.auto_restart,
             transport,
             disabled_tools: s.disabled_tools.iter().cloned().collect(),
+            oauth: s.oauth,
         }
     }
 
@@ -379,7 +399,7 @@ impl Tulma {
     }
 
     /// Applies `f` to the state and persists it; the closure's error leaves state untouched.
-    fn mutate<T>(&self, f: impl FnOnce(&mut State) -> Result<T>) -> Result<T> {
+    pub(crate) fn mutate<T>(&self, f: impl FnOnce(&mut State) -> Result<T>) -> Result<T> {
         let mut state = self.state.lock().unwrap();
         let mut draft = state.clone();
         let out = f(&mut draft)?;
@@ -428,7 +448,9 @@ impl Tulma {
             let mut copy = source.duplicate(&name, &s.workspace_slugs());
             for (server, original) in copy.servers.iter_mut().zip(&source.servers) {
                 server.transport = self.store.resolve(&original.transport)?;
-                self.store.externalize(&mut server.transport, None)?;
+                self.store.externalize(&mut server.transport, None, &Store::secret_keys(&original.transport))?;
+                // Tokens are stored per server id, so the copy signs in on its own.
+                server.oauth = false;
             }
             s.workspaces.push(copy.clone());
             Ok(copy)
@@ -465,6 +487,7 @@ impl Tulma {
         })?;
         for server in &servers {
             self.store.forget(&server.transport);
+            self.forget_sign_in(&server.id);
             self.forget_runtime(&server.id);
         }
         self.emit_state();
@@ -508,7 +531,7 @@ impl Tulma {
             let mut config = ServerConfig::new(&input.name, input.transport.clone(), &ws.server_slugs());
             config.enabled = input.enabled;
             config.auto_restart = input.auto_restart;
-            self.store.externalize(&mut config.transport, None)?;
+            self.store.externalize(&mut config.transport, None, &input.secret_keys)?;
             ws.servers.push(config.clone());
             Ok(config)
         })?;
@@ -538,9 +561,15 @@ impl Tulma {
             server.enabled = input.enabled;
             server.auto_restart = input.auto_restart;
             server.transport = input.transport.clone();
-            self.store.externalize(&mut server.transport, Some(&old.transport))?;
+            self.store.externalize(&mut server.transport, Some(&old.transport), &input.secret_keys)?;
+            if server.oauth && endpoint_url(&old.transport) != endpoint_url(&server.transport) {
+                server.oauth = false;
+            }
             Ok((old, server.clone()))
         })?;
+        if old.oauth && !new.oauth {
+            self.forget_sign_in(id);
+        }
         let active = self.is_active_server(id);
         let changed = old.transport != new.transport || old.slug != new.slug;
         if !new.enabled || !active {
@@ -568,6 +597,7 @@ impl Tulma {
             Ok(ws.servers.remove(idx))
         })?;
         self.store.forget(&removed.transport);
+        self.forget_sign_in(id);
         self.forget_runtime(id);
         self.rebuild_catalog();
         self.emit_state();
@@ -711,13 +741,13 @@ impl Tulma {
             for action in import::plan_apply(&preview, ws, names.as_deref(), policy) {
                 match action {
                     ImportAction::Add(mut config) => {
-                        self.store.externalize(&mut config.transport, None)?;
+                        self.store.externalize(&mut config.transport, None, &BTreeSet::new())?;
                         report.added.push(config.id.clone());
                         ws.servers.push(config);
                     }
                     ImportAction::Replace { id, mut config } => {
                         let slot = ws.servers.iter_mut().find(|x| x.id == id).expect("planned from this workspace");
-                        self.store.externalize(&mut config.transport, Some(&slot.transport))?;
+                        self.store.externalize(&mut config.transport, Some(&slot.transport), &BTreeSet::new())?;
                         previous.push(slot.clone());
                         *slot = config;
                         report.replaced.push(id);
@@ -891,6 +921,14 @@ fn non_empty<'a>(name: &'a str, fallback: &'a str) -> Result<&'a str> {
         (false, _) => Ok(trimmed),
         (true, false) => Ok(fallback),
         (true, true) => Err(anyhow!("name must not be empty")),
+    }
+}
+
+/// Tokens are bound to the server they were issued for.
+fn endpoint_url(transport: &Transport) -> Option<&str> {
+    match transport {
+        Transport::Http { url, .. } => Some(url),
+        Transport::Stdio { .. } => None,
     }
 }
 

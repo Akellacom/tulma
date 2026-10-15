@@ -27,20 +27,33 @@ type TransportView =
   | { type: "stdio"; command: string; args: string[]; env: KeyValue[]; cwd?: string }
   | { type: "http"; url: string; headers: KeyValue[] }
 type ServerPayload = { name: string; enabled?: boolean; autoRestart?: boolean; transport: TransportView }
-type ServerView = { id; name; slug; enabled; autoRestart; transport: TransportView; disabledTools: string[] }
+type ServerView = { id; name; slug; enabled; autoRestart; transport: TransportView; disabledTools: string[];
+                    oauth: boolean }                                    // signed in; tokens are in the Keychain
 type WorkspaceView = { id; name; slug; servers: ServerView[] }
 type Settings = { port: number; callTimeoutSecs: number; logRetentionDays: number }
 type RunState = "stopped" | "starting" | "running" | "error"
 type ServerStatus = { state: RunState; error?: string; pid?: number; toolCount; promptCount; resourceCount;
-                      restartAttempt; serverName?: string; serverVersion?: string }
+                      restartAttempt; serverName?: string; serverVersion?: string;
+                      needsAuth: boolean }   // answered 401; stays in "error" without restarts until sign-in
 type EndpointInfo = { url?: string; port: number; running: boolean; error?: string; clients: number }
 type StateView = { activeWorkspace: string; workspaces: WorkspaceView[]; settings: Settings;
                    statuses: { [serverId]: ServerStatus }; endpoint: EndpointInfo }
 type ToolView = { name; exposedName; title?; description?; inputSchema: object; enabled: boolean }
 type ToolsView = { serverId; live: boolean; tools: ToolView[] }        // live=false: last known list
+
+type CatalogSource = "official" | "archestra"
+type InputField = { key; label; description?; required: boolean; secret: boolean; default?: string;
+                    kind: "string" | "number" | "boolean" | "directory" | "file"; choices: string[];
+                    multiple: boolean }                                 // multiple: one value per line, one arg each
+type InstallOption = { id; label; template: TransportView; inputs: InputField[]; oauth: boolean;
+                       note?: string; unsupported?: string }            // unsupported: listed, cannot be installed
+type CatalogEntry = { id; source: CatalogSource; name; title; description; version?; repository?; website?;
+                      stars?: number; category?: string; options: InstallOption[] }
 ```
 
-On input, secret values are sent in plain text. The daemon moves any non-empty value whose key matches `token|secret|key|password|auth` into the Keychain (service `app.tulma`). `config.json` keeps only a `keychain:<uuid>` reference. Views always carry the resolved value.
+`template` values hold `{{key}}` placeholders for `inputs`. Rendering drops env vars, headers and arguments whose optional input is empty (a named flag goes with its value), and moves secret argument values into `TULMA_<KEY>` env vars that the argument references as `${TULMA_<KEY>}`, so they end up in the Keychain instead of `config.json`.
+
+On input, secret values are sent in plain text. The daemon moves into the Keychain (service `app.tulma`) any non-empty value whose key matches `token|secret|key|password|auth`, whose `KeyValue.secret` is true, or that was already a secret. `config.json` keeps only a `keychain:<uuid>` reference. Views always carry the resolved value.
 
 ## Requests
 
@@ -60,6 +73,10 @@ On input, secret values are sent in plain text. The daemon moves any non-empty v
 | `server.setEnabled` | `{id, enabled}` | `null` |
 | `server.start` / `server.stop` / `server.restart` | `{id}` | `null` (a manual start resets the restart counter) |
 | `server.setToolEnabled` | `{id, tool, enabled}` | `null` (`tool` is the server's original tool name) |
+| `server.authorize` | `{id}` | `{authUrl}`: open it in the browser. The daemon discovers the authorization server, registers a client (dynamic client registration) and waits up to 5 minutes for the redirect on `http://127.0.0.1:<random port>/callback`. The outcome arrives as `server.auth`; success restarts the server |
+| `server.signOut` | `{id}` | `null` (deletes the tokens and restarts the server, which then reports `needsAuth`) |
+| `catalog.search` | `{source: CatalogSource, query?, cursor?}` | `{entries: CatalogEntry[], nextCursor?}`, 30 per page, cached for 10 minutes |
+| `catalog.render` | `{option: InstallOption, values: {[key]: string}}` | `{transport: TransportView, missing: string[]}`: pass `transport` to `server.add`. `missing` lists required inputs still empty; their placeholders stay in the output |
 | `import.preview` | `{workspaceId, text}` | `{items: [{name, transport?, enabled, status: {kind: "new"\|"duplicate"\|"invalid", reason?}, warning?}]}` |
 | `import.apply` | `{workspaceId, text, names?: string[], duplicatePolicy: "skip"\|"replace"}` | `{added: id[], replaced: id[], skipped: name[]}` |
 | `tools.list` | `{serverId}` | `ToolsView` |
@@ -81,6 +98,7 @@ Event row: `{id, ts, kind, workspaceId?, serverId?, level, message}`. Tool call 
 | `state.changed` | `StateView`, sent after any workspace, server or settings change |
 | `server.status` | `{serverId, status: ServerStatus}` |
 | `server.tools` | `ToolsView` |
+| `server.auth` | `{serverId, ok: boolean, error?}`, when a browser sign-in finishes |
 | `catalog.changed` | `{tools, prompts, resources}`, the counts exposed on the endpoint |
 | `log.event` | event row (`id` is 0) |
 | `log.toolCall` | tool call row (`id` is 0) |

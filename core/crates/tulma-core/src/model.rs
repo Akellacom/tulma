@@ -42,6 +42,13 @@ pub struct ServerConfig {
     pub transport: Transport,
     #[serde(default)]
     pub disabled_tools: BTreeSet<String>,
+    /// Set once the user signed in; the tokens themselves live in the secret store.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub oauth: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +200,7 @@ impl ServerConfig {
             auto_restart: true,
             transport,
             disabled_tools: BTreeSet::new(),
+            oauth: false,
         }
     }
 }

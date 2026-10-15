@@ -1,4 +1,4 @@
-.PHONY: gen core core-debug app run test icons clean
+.PHONY: gen core core-debug app run test release icons clean
 
 APP := build/Build/Products/Release/Tulma.app
 ASSETS := Tulma/Resources/Assets.xcassets
@@ -23,6 +23,10 @@ test: core-debug gen
 	cd core && cargo test
 	xcodebuild -project Tulma.xcodeproj -scheme Tulma -derivedDataPath build \
 		-destination 'platform=macOS,arch=arm64' test -quiet
+
+# Developer ID signed, notarized DMG in build/release; see docs/releasing.md
+release:
+	scripts/release.sh
 
 # Needs librsvg: brew install librsvg
 icons:

@@ -19,7 +19,7 @@ struct AppStoreTests {
     @Test func statusNotificationUpdatesOnlyThatServer() {
         let store = AppStore()
         store.apply(method: "state.changed", payload: note("state.changed", ProtocolTests.stateJSON))
-        store.apply(method: "server.status", payload: note("server.status", #"{"serverId":"s1","status":{"state":"error","error":"boom","pid":null,"toolCount":0,"promptCount":0,"resourceCount":0,"restartAttempt":2}}"#))
+        store.apply(method: "server.status", payload: note("server.status", #"{"serverId":"s1","status":{"state":"error","error":"boom","pid":null,"toolCount":0,"promptCount":0,"resourceCount":0,"restartAttempt":2,"needsAuth":false}}"#))
         #expect(store.status("s1").state == .error)
         #expect(store.status("s1").error == "boom")
         #expect(store.hasErrors)
@@ -53,6 +53,14 @@ struct AppStoreTests {
         #expect(store.selectedServer == "s1")
         store.sidebar = .workspace("w-other")
         #expect(store.selectedServer == nil)
+    }
+
+    @Test func authNotificationsTrackSignInOutcome() {
+        let store = AppStore()
+        store.apply(method: "server.auth", payload: note("server.auth", #"{"serverId":"s2","ok":false,"error":"access_denied"}"#))
+        #expect(store.signIns["s2"] == .failed("access_denied"))
+        store.apply(method: "server.auth", payload: note("server.auth", #"{"serverId":"s2","ok":true}"#))
+        #expect(store.signIns["s2"] == nil)
     }
 
     @Test func switchingLogTableClearsLogSelection() {

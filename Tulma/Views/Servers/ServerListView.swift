@@ -21,8 +21,10 @@ struct ServerListView: View {
                 ContentUnavailableView {
                     Label("No servers", systemImage: "server.rack")
                 } description: {
-                    Text("Add a server, or import an mcpServers config from Claude Desktop or Cursor. You can also drop a .json file here.")
+                    Text("Pick a server from a catalog, add one by hand, or import an mcpServers config from Claude Desktop or Cursor. You can also drop a .json file here.")
                 } actions: {
+                    Button("Browse Catalog…") { store.showCatalog = true }
+                        .buttonStyle(.borderedProminent)
                     Button("Import…") { store.showImport = true }
                     Button("Add Server…") { store.showAddServer = true }
                 }
@@ -33,6 +35,8 @@ struct ServerListView: View {
         .navigationTitle(workspace.name)
         .toolbar {
             ToolbarItemGroup {
+                Button { store.showCatalog = true } label: { Label("Browse Catalog", systemImage: "square.grid.2x2") }
+                    .help("Browse the MCP Registry and Archestra catalogs (⇧⌘B)")
                 Button { store.showAddServer = true } label: { Label("Add Server", systemImage: "plus.rectangle") }
                     .help("Add server (⇧⌘N)")
                 Button { store.showImport = true } label: { Label("Import", systemImage: "square.and.arrow.down") }
@@ -129,6 +133,7 @@ struct ServerRow: View {
         case .running:
             let enabledTools = max(status.toolCount - server.disabledTools.count, 0)
             return "\(enabledTools) tools" + (status.serverVersion.map { " · v\($0)" } ?? "")
+        case .error where status.needsAuth: return "Sign-in required"
         case .error: return status.error ?? "Error"
         case .starting: return status.restartAttempt > 0 ? "Restarting (attempt \(status.restartAttempt))…" : "Starting…"
         case .stopped: return server.transport.summary

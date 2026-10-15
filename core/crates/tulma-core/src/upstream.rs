@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 use crate::app::Tulma;
 use crate::env::{child_env, expand_vars, resolve_command};
 use crate::logs::{LogRecord, StderrRow, ToolCallRow, now_ms};
+use crate::oauth::NeedsAuth;
 use crate::model::{ServerConfig, ServerId, Transport};
 use crate::redact::{redact_json, redact_text, truncate};
 
@@ -56,6 +57,9 @@ pub struct ServerStatus {
     pub restart_attempt: u32,
     pub server_name: Option<String>,
     pub server_version: Option<String>,
+    /// The server answered 401; it stays down until the user signs in.
+    #[serde(default)]
+    pub needs_auth: bool,
 }
 
 #[derive(Default)]
@@ -224,16 +228,18 @@ impl Tulma {
             });
             self.emit_status(&id);
             let started = Instant::now();
-            let message = match self.run_once(&id, generation, &stop).await {
+            let (message, needs_auth) = match self.run_once(&id, generation, &stop).await {
                 Ok(Exit::Stopped) => break,
                 Ok(Exit::Closed) => {
                     let tail = self.stderr_last(&id);
-                    match tail {
+                    let message = match tail {
                         Some(line) => format!("server exited: {line}"),
                         None => "server exited".to_string(),
-                    }
+                    };
+                    (message, false)
                 }
-                Err(err) => format!("{err:#}"),
+                Err(err) if err.downcast_ref::<NeedsAuth>().is_some() => (NeedsAuth.to_string(), true),
+                Err(err) => (format!("{err:#}"), false),
             };
             if stop.is_cancelled() {
                 break;
@@ -244,11 +250,21 @@ impl Tulma {
                     state: RunState::Error,
                     error: Some(message.clone()),
                     restart_attempt: attempt_no,
+                    needs_auth,
                     ..Default::default()
                 };
             });
             self.emit_status(&id);
             self.rebuild_catalog();
+            if needs_auth {
+                // Retrying cannot help; signing in restarts the server.
+                self.log_event("server.auth", Some(&id), "warn", "sign-in required".into());
+                self.update(&id, generation, |u| {
+                    u.stop = None;
+                    u.task = None;
+                });
+                return;
+            }
             self.log_event("server.error", Some(&id), "error", message);
             if started.elapsed() > STABLE_AFTER {
                 attempt = 0;
@@ -342,6 +358,7 @@ impl Tulma {
                 restart_attempt: u.status.restart_attempt,
                 server_name: info.as_ref().and_then(|i| i.server_info.as_ref()).map(|i| i.name.clone()),
                 server_version: info.as_ref().and_then(|i| i.server_info.as_ref()).map(|i| i.version.clone()),
+                needs_auth: false,
             };
             u.tools = tools.clone();
             u.prompts = prompts;
@@ -453,13 +470,19 @@ impl Tulma {
                     let value = HeaderValue::from_str(&v).with_context(|| format!("invalid value for header {k}"))?;
                     map.insert(name, value);
                 }
-                let transport = StreamableHttpClientTransport::from_config(
-                    StreamableHttpClientTransportConfig::with_uri(url.clone())
-                        .custom_headers(map)
-                        .reinit_on_expired_session(true),
-                );
-                let service = handler.serve(transport).await.map_err(|e| {
-                    if url.trim_end_matches('/').ends_with("/sse") {
+                let transport_config = StreamableHttpClientTransportConfig::with_uri(url.clone())
+                    .custom_headers(map)
+                    .reinit_on_expired_session(true);
+                let served = if config.oauth {
+                    let client = self.authorized_client(&config.id, &url).await?;
+                    handler.serve(StreamableHttpClientTransport::with_client(client, transport_config)).await
+                } else {
+                    handler.serve(StreamableHttpClientTransport::from_config(transport_config)).await
+                };
+                let service = served.map_err(|e| {
+                    if e.is_authorization_required() {
+                        anyhow::Error::new(NeedsAuth)
+                    } else if url.trim_end_matches('/').ends_with("/sse") {
                         anyhow!("connect failed: {e}. Legacy SSE is not supported; wrap it with `npx mcp-remote {url}`")
                     } else {
                         anyhow!("connect failed: {e}")

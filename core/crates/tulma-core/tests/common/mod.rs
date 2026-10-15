@@ -39,6 +39,7 @@ pub fn echo(name: &str) -> ServerInput {
             env: BTreeMap::new(),
             cwd: None,
         },
+        secret_keys: Default::default(),
     }
 }
 

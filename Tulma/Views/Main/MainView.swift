@@ -28,6 +28,10 @@ struct MainView: View {
             AddServerSheet()
                 .environment(store)
         }
+        .sheet(isPresented: $store.showCatalog) {
+            CatalogSheet()
+                .environment(store)
+        }
         .alert(
             "Something went wrong",
             isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })

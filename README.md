@@ -36,6 +36,8 @@ Claude Desktop ─┘                                        └── linear   
 - **Per-tool switches.** Hide individual tools from clients without removing the server.
 - **Supervision.** Servers restart automatically with backoff (1, 2, 4, 8, 16 s, then they stay in the error state). On quit, each server's whole process group is killed, so `npx` grandchildren don't outlive it.
 - **Secrets in the Keychain.** Env vars and headers whose key matches `token|secret|key|password|auth` are stored in the macOS Keychain. `config.json` only keeps a reference.
+- **Catalogs.** Browse the official [MCP Registry](https://registry.modelcontextprotocol.io) and the [Archestra catalog](https://archestra.ai/mcp-catalog), fill in the server's settings and add it in a couple of clicks. You see the exact command before it runs; versions are pinned.
+- **OAuth sign-in.** Remote servers that answer 401 show a "Sign in" button. Tulma discovers the authorization server, registers itself, signs in through the browser with PKCE, keeps the tokens in the Keychain and refreshes them.
 - **Import.** Paste or drop configs from Claude Desktop, Cursor or VS Code.
 - **Export.** Download a workspace as an `mcpServers` JSON, with or without secrets.
 - **Logs.** Tool calls, lifecycle events and server stderr go to SQLite, with secret redaction and a retention limit.
@@ -51,7 +53,7 @@ Claude Desktop ─┘                                        └── linear   
 | XcodeGen | `brew install xcodegen` |
 | Signing | an "Apple Development" certificate (a free Apple ID works), or ad-hoc signing (see below) |
 
-There are no prebuilt binaries yet. Build from source.
+Download the signed and notarized DMG from [Releases](../../releases), open it and drag Tulma to Applications. To build it yourself, read on. Maintainers: see [docs/releasing.md](docs/releasing.md).
 
 ## Build and install
 
