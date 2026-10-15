@@ -46,6 +46,10 @@ struct ServerOverview: View {
         store.activeWorkspace?.servers.contains { $0.id == server.id } ?? false
     }
     private var dirty: Bool { draft != ServerDraft(server) }
+    private var showsSignIn: Bool {
+        guard case .http = server.transport else { return false }
+        return server.oauth || status.needsAuth || store.signIns[server.id] != nil
+    }
 
     var body: some View {
         Form {
@@ -84,6 +88,9 @@ struct ServerOverview: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            if showsSignIn {
+                SignInSection(server: server, status: status)
+            }
             ServerForm(draft: $draft)
             Section {
                 HStack {
@@ -115,6 +122,62 @@ struct ServerOverview: View {
             Button("Delete Server", role: .destructive) { Task { await store.deleteServer(server.id) } }
         } message: {
             Text("The server stops and its Keychain secrets are removed.")
+        }
+    }
+}
+
+struct SignInSection: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.openURL) private var openURL
+    let server: ServerView
+    let status: ServerStatus
+
+    private var signIn: SignInState? { store.signIns[server.id] }
+
+    var body: some View {
+        Section("Sign-in") {
+            if signIn == .waiting {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for you to finish in the browser…")
+                    Spacer()
+                    Button("Restart Sign-in") { start() }
+                }
+            } else if server.oauth && !status.needsAuth {
+                HStack {
+                    Label("Signed in", systemImage: "checkmark.seal")
+                        .foregroundStyle(.green)
+                    Spacer()
+                    Button("Sign Out") { Task { await store.signOut(server.id) } }
+                }
+            } else {
+                HStack {
+                    Text("This server asks you to sign in through the browser.")
+                    Spacer()
+                    Button("Sign In…") { start() }
+                        .buttonStyle(.borderedProminent)
+                }
+                Text("If it uses an API key instead, add an Authorization header below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if case .failed(let message) = signIn {
+                HStack(alignment: .top) {
+                    Text(message)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("Dismiss") { store.dismissSignInError(server.id) }
+                        .buttonStyle(.borderless)
+                }
+            }
+        }
+    }
+
+    private func start() {
+        Task {
+            if let url = await store.signIn(server.id) { openURL(url) }
         }
     }
 }

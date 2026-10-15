@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::app::{Tulma, ServerInput, SettingsPatch, TransportView};
 use crate::import::DuplicatePolicy;
 use crate::logs::LogQuery;
+use crate::registry::{self, InstallOption, Source};
 
 const PARSE_ERROR: i64 = -32700;
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -56,7 +57,13 @@ fn yes() -> bool {
 
 impl From<ServerPayload> for ServerInput {
     fn from(p: ServerPayload) -> Self {
-        ServerInput { name: p.name, enabled: p.enabled, auto_restart: p.auto_restart, transport: p.transport.into() }
+        ServerInput {
+            name: p.name,
+            enabled: p.enabled,
+            auto_restart: p.auto_restart,
+            secret_keys: p.transport.secret_keys(),
+            transport: p.transport.into(),
+        }
     }
 }
 
@@ -243,6 +250,23 @@ struct StderrQuery {
     limit: Option<u32>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogSearch {
+    source: Source,
+    #[serde(default)]
+    query: String,
+    cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogRender {
+    option: InstallOption,
+    #[serde(default)]
+    values: std::collections::BTreeMap<String, String>,
+}
+
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
     tokio::task::spawn_blocking(f).await?
 }
@@ -316,6 +340,23 @@ async fn dispatch(app: &Arc<Tulma>, method: &str, raw: Value) -> RpcResult {
             let p: ToolToggle = params(raw)?;
             app.set_tool_enabled(&p.id, &p.tool, p.enabled).await?;
             ok(Value::Null)
+        }
+        "server.authorize" => {
+            let p: Id = params(raw)?;
+            ok(json!({"authUrl": app.authorize(&p.id).await?}))
+        }
+        "server.signOut" => {
+            let p: Id = params(raw)?;
+            app.sign_out(&p.id).await?;
+            ok(Value::Null)
+        }
+        "catalog.search" => {
+            let p: CatalogSearch = params(raw)?;
+            ok(app.registry.search(p.source, &p.query, p.cursor.as_deref()).await?)
+        }
+        "catalog.render" => {
+            let p: CatalogRender = params(raw)?;
+            ok(registry::render(&p.option, &p.values))
         }
         "import.preview" => {
             let p: ImportText = params(raw)?;

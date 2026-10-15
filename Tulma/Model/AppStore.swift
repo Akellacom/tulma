@@ -17,6 +17,11 @@ enum LogSelection: Hashable {
     case event(EventRow)
 }
 
+enum SignInState: Equatable {
+    case waiting
+    case failed(String)
+}
+
 struct LogFilter: Hashable {
     var table: LogTable = .toolCalls
     var serverId: String?
@@ -51,6 +56,8 @@ final class AppStore {
     private(set) var liveCalls: [ToolCallRow] = []
     private(set) var liveEvents: [EventRow] = []
     private(set) var stderr: [String: [StderrRow]] = [:]
+    /// Browser sign-ins in flight or failed, by server id.
+    private(set) var signIns: [String: SignInState] = [:]
     var sidebar: SidebarItem? {
         didSet {
             guard case .workspace(let id) = sidebar, let selected = selectedServer else { return }
@@ -71,6 +78,7 @@ final class AppStore {
     var showExport = false
     var exportSeed: String?
     var showAddServer = false
+    var showCatalog = false
     var promptNewWorkspace = false
 
     let client: DaemonClient
@@ -175,6 +183,10 @@ final class AppStore {
                 lines.append(row)
                 if lines.count > Self.stderrLimit { lines.removeFirst(lines.count - Self.stderrLimit) }
                 stderr[row.serverId] = lines
+            }
+        case "server.auth":
+            if let e = decode(ServerAuthEvent.self) {
+                signIns[e.serverId] = e.ok ? nil : .failed(e.error ?? "Sign-in failed")
             }
         case "endpoint.changed":
             if let info = decode(EndpointInfo.self) { endpoint = info }
@@ -326,6 +338,39 @@ final class AppStore {
 
     func setTool(_ server: String, _ tool: String, enabled: Bool) async {
         await run { try await client.perform("server.setToolEnabled", ToolToggle(id: server, tool: tool, enabled: enabled)) }
+    }
+
+    /// Starts a browser sign-in and returns the page to open; the outcome arrives as `server.auth`.
+    func signIn(_ id: String) async -> URL? {
+        signIns[id] = .waiting
+        do {
+            let start: AuthStart = try await client.call("server.authorize", ID(id: id))
+            guard let url = URL(string: start.authUrl) else { throw DaemonError.badResponse("server.authorize: bad URL") }
+            return url
+        } catch {
+            signIns[id] = .failed(error.localizedDescription)
+            return nil
+        }
+    }
+
+    func signOut(_ id: String) async {
+        signIns[id] = nil
+        await run { try await client.perform("server.signOut", ID(id: id)) }
+    }
+
+    func dismissSignInError(_ id: String) {
+        signIns[id] = nil
+    }
+
+    private struct CatalogSearch: Encodable, Sendable { var source: CatalogSource; var query: String; var cursor: String? }
+    private struct CatalogRender: Encodable, Sendable { var option: InstallOption; var values: [String: String] }
+
+    func searchCatalog(_ source: CatalogSource, query: String, cursor: String? = nil) async throws -> CatalogPage {
+        try await client.call("catalog.search", CatalogSearch(source: source, query: query, cursor: cursor))
+    }
+
+    func renderInstall(_ option: InstallOption, values: [String: String]) async throws -> RenderedInstall {
+        try await client.call("catalog.render", CatalogRender(option: option, values: values))
     }
 
     private struct ServerRef: Encodable, Sendable { var serverId: String }

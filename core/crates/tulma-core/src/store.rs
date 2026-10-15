@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -134,11 +134,21 @@ impl Store {
     }
 
     /// Moves sensitive plain values into the secret store, reusing the ref a key already had.
-    pub fn externalize(&self, transport: &mut Transport, previous: Option<&Transport>) -> Result<()> {
+    ///
+    /// A key is sensitive when its name says so, when `marked` lists it, or when it was
+    /// already a secret in `previous`.
+    pub fn externalize(
+        &self,
+        transport: &mut Transport,
+        previous: Option<&Transport>,
+        marked: &BTreeSet<String>,
+    ) -> Result<()> {
         let empty = Default::default();
         let prev = previous.map(Transport::secrets).unwrap_or(&empty);
         for (key, value) in transport.secrets_mut().iter_mut() {
-            if value.starts_with(SECRET_PREFIX) || value.is_empty() || !is_sensitive_key(key) {
+            let was_secret = prev.get(key).is_some_and(|v| v.starts_with(SECRET_PREFIX));
+            let sensitive = is_sensitive_key(key) || marked.contains(key) || was_secret;
+            if value.starts_with(SECRET_PREFIX) || value.is_empty() || !sensitive {
                 continue;
             }
             let account = match prev.get(key).and_then(|v| v.strip_prefix(SECRET_PREFIX)) {
@@ -175,6 +185,20 @@ impl Store {
             }
         }
         Ok(resolved)
+    }
+
+    /// Keys whose stored value is a secret-store reference.
+    pub fn secret_keys(transport: &Transport) -> BTreeSet<String> {
+        transport
+            .secrets()
+            .iter()
+            .filter(|(_, v)| v.starts_with(SECRET_PREFIX))
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+
+    pub(crate) fn secret_store(&self) -> Arc<dyn SecretStore> {
+        self.secrets.clone()
     }
 
     pub fn forget(&self, transport: &Transport) {
@@ -256,7 +280,7 @@ mod tests {
     fn externalize_moves_sensitive_values_into_secret_store() {
         let (_dir, store, secrets) = store();
         let mut t = stdio(&[("GITHUB_TOKEN", "ghp_123"), ("MEMORY_FILE_PATH", "/tmp/m.json"), ("EXA_API_KEY", "")]);
-        store.externalize(&mut t, None).unwrap();
+        store.externalize(&mut t, None, &BTreeSet::new()).unwrap();
         let env = t.secrets();
         let token_ref = env["GITHUB_TOKEN"].clone();
         assert!(token_ref.starts_with(SECRET_PREFIX));
@@ -271,15 +295,30 @@ mod tests {
     fn externalize_reuses_existing_ref_and_drops_orphans() {
         let (_dir, store, secrets) = store();
         let mut first = stdio(&[("GITHUB_TOKEN", "old"), ("API_KEY", "k")]);
-        store.externalize(&mut first, None).unwrap();
+        store.externalize(&mut first, None, &BTreeSet::new()).unwrap();
         let token_ref = first.secrets()["GITHUB_TOKEN"].clone();
         let key_account = first.secrets()["API_KEY"].trim_start_matches(SECRET_PREFIX).to_string();
 
         let mut second = stdio(&[("GITHUB_TOKEN", "new")]);
-        store.externalize(&mut second, Some(&first)).unwrap();
+        store.externalize(&mut second, Some(&first), &BTreeSet::new()).unwrap();
         assert_eq!(second.secrets()["GITHUB_TOKEN"], token_ref);
         assert_eq!(store.resolve(&second).unwrap().secrets()["GITHUB_TOKEN"], "new");
         assert_eq!(secrets.get(&key_account).unwrap(), None);
+    }
+
+    #[test]
+    fn externalize_honors_marked_keys_and_keeps_existing_secrets_secret() {
+        let (_dir, store, _) = store();
+        let mut first = stdio(&[("GITHUB_PAT", "p1"), ("REGION", "eu")]);
+        store.externalize(&mut first, None, &BTreeSet::from(["GITHUB_PAT".to_string()])).unwrap();
+        assert!(first.secrets()["GITHUB_PAT"].starts_with(SECRET_PREFIX));
+        assert_eq!(first.secrets()["REGION"], "eu");
+        assert_eq!(Store::secret_keys(&first), BTreeSet::from(["GITHUB_PAT".to_string()]));
+
+        let mut second = stdio(&[("GITHUB_PAT", "p2"), ("REGION", "us")]);
+        store.externalize(&mut second, Some(&first), &BTreeSet::new()).unwrap();
+        assert_eq!(second.secrets()["GITHUB_PAT"], first.secrets()["GITHUB_PAT"]);
+        assert_eq!(store.resolve(&second).unwrap().secrets()["GITHUB_PAT"], "p2");
     }
 
     #[test]
@@ -289,7 +328,7 @@ mod tests {
             url: "https://x".into(),
             headers: BTreeMap::from([("Authorization".into(), "Bearer t".into())]),
         };
-        store.externalize(&mut t, None).unwrap();
+        store.externalize(&mut t, None, &BTreeSet::new()).unwrap();
         let account = t.secrets()["Authorization"].trim_start_matches(SECRET_PREFIX).to_string();
         store.forget(&t);
         assert_eq!(secrets.get(&account).unwrap(), None);

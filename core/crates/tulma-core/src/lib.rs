@@ -10,6 +10,8 @@ pub mod http;
 pub mod import;
 pub mod logs;
 pub mod model;
+pub mod oauth;
 pub mod redact;
+pub mod registry;
 pub mod store;
 pub mod upstream;

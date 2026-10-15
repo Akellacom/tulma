@@ -94,6 +94,8 @@ struct ServerView: Codable, Hashable, Sendable, Identifiable {
     var autoRestart: Bool
     var transport: TransportView
     var disabledTools: [String]
+    /// Signed in through OAuth; the tokens live in the daemon's Keychain.
+    var oauth: Bool
 }
 
 struct ServerPayload: Codable, Hashable, Sendable {
@@ -130,6 +132,8 @@ struct ServerStatus: Codable, Hashable, Sendable {
     var restartAttempt: Int = 0
     var serverName: String?
     var serverVersion: String?
+    /// The server answered 401 and waits for the user to sign in.
+    var needsAuth = false
 
     static let stopped = ServerStatus()
 }
@@ -274,6 +278,77 @@ struct StderrRow: Codable, Hashable, Sendable, Identifiable {
 struct ServerStatusEvent: Codable, Sendable {
     var serverId: String
     var status: ServerStatus
+}
+
+struct ServerAuthEvent: Codable, Sendable {
+    var serverId: String
+    var ok: Bool
+    var error: String?
+}
+
+struct AuthStart: Codable, Sendable {
+    var authUrl: String
+}
+
+// MARK: Catalog
+
+enum CatalogSource: String, Codable, CaseIterable, Identifiable, Sendable {
+    case official, archestra
+    var id: String { rawValue }
+    var title: String { self == .official ? "MCP Registry" : "Archestra" }
+}
+
+enum InputKind: String, Codable, Sendable {
+    case string, number, boolean, directory, file
+}
+
+struct InputField: Codable, Hashable, Sendable, Identifiable {
+    var key: String
+    var label: String
+    var description: String?
+    var required: Bool
+    var secret: Bool
+    var `default`: String?
+    var kind: InputKind
+    var choices: [String]
+    var multiple: Bool
+    var id: String { key }
+}
+
+struct InstallOption: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var label: String
+    var template: TransportView
+    var inputs: [InputField]
+    var oauth: Bool
+    var note: String?
+    var unsupported: String?
+}
+
+struct CatalogEntry: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var source: CatalogSource
+    var name: String
+    var title: String
+    var description: String
+    var version: String?
+    var repository: String?
+    var website: String?
+    var stars: Int?
+    var category: String?
+    var options: [InstallOption]
+
+    var installable: Bool { options.contains { $0.unsupported == nil } }
+}
+
+struct CatalogPage: Codable, Hashable, Sendable {
+    var entries: [CatalogEntry]
+    var nextCursor: String?
+}
+
+struct RenderedInstall: Codable, Hashable, Sendable {
+    var transport: TransportView
+    var missing: [String]
 }
 
 struct CreatedID: Codable, Sendable {

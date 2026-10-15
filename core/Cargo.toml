@@ -12,7 +12,7 @@ tulma-core = { path = "crates/tulma-core" }
 rmcp = { version = "3.5.1", default-features = false, features = [
   "base64", "macros", "server", "client",
   "transport-streamable-http-server", "transport-child-process",
-  "transport-streamable-http-client-reqwest", "transport-io", "reqwest",
+  "transport-streamable-http-client-reqwest", "transport-io", "reqwest", "auth",
 ] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 tokio = { version = "1", features = ["full"] }
@@ -34,6 +34,7 @@ process-wrap = { version = "10", features = ["tokio1"] }
 futures = "0.3"
 anyhow = "1"
 libc = "0.2"
+async-trait = "0.1"
 
 [profile.release]
 lto = "thin"

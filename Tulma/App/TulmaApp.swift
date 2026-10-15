@@ -39,6 +39,8 @@ struct AppCommands: Commands {
                 .keyboardShortcut("n")
             Button("Add Server…") { store.showAddServer = true }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+            Button("Browse Catalog…") { store.showCatalog = true }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
             Button("Import…") { store.showImport = true }
                 .keyboardShortcut("i")
             Button("Export…") { store.showExport = true }
