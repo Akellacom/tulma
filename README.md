@@ -53,7 +53,7 @@ Claude Desktop ─┘                                        └── linear   
 | XcodeGen | `brew install xcodegen` |
 | Signing | an "Apple Development" certificate (a free Apple ID works), or ad-hoc signing (see below) |
 
-There are no prebuilt binaries yet. Build from source.
+Download the signed and notarized DMG from [Releases](../../releases), open it and drag Tulma to Applications. To build it yourself, read on. Maintainers: see [docs/releasing.md](docs/releasing.md).
 
 ## Build and install
 

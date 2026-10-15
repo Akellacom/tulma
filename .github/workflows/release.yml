@@ -1,0 +1,174 @@
+# Builds, signs and notarizes Tulma, then publishes the DMG as a GitHub release.
+#
+# - Push to main: releases when MARKETING_VERSION in project.yml has no v<version> tag yet.
+#   Bump it with scripts/bump-version.sh; pushes that keep the version only run the check.
+# - Push a tag like v0.2.0: releases that tag.
+# - Manual run: builds the DMG and keeps it as a workflow artifact without publishing.
+#
+# Repository secrets (see docs/releasing.md):
+#   DEVELOPER_ID_P12           base64 of the exported "Developer ID Application" certificate + key
+#   DEVELOPER_ID_P12_PASSWORD  password of that .p12
+#   NOTARY_KEY_P8              base64 of the App Store Connect API key (AuthKey_XXXX.p8)
+#   NOTARY_KEY_ID              its Key ID
+#   NOTARY_ISSUER_ID           its Issuer ID
+
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 0.2.0 (not published)"
+        required: true
+
+permissions:
+  contents: write
+
+# One release at a time: a queued run sees the tag the previous one created and skips.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      build: ${{ steps.plan.outputs.build }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags decide whether this version is already released
+
+      - id: plan
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          project_version="$(sed -n 's/^ *MARKETING_VERSION: *"\{0,1\}\([0-9.]*\)"\{0,1\} *$/\1/p' project.yml | head -1)"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' core/Cargo.toml | head -1)"
+          build=true
+          publish=true
+          case "$GITHUB_EVENT_NAME/$GITHUB_REF_TYPE" in
+            workflow_dispatch/*)
+              version="${INPUT_VERSION#v}"
+              publish=false
+              ;;
+            push/tag)
+              version="${GITHUB_REF_NAME#v}"
+              ;;
+            *)
+              version="$project_version"
+              if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
+                echo "::notice::v$version is already released. Run scripts/bump-version.sh to publish a new release."
+                build=false
+                publish=false
+              fi
+              ;;
+          esac
+          [[ "$version" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] \
+            || { echo "::error::Version must look like 1.2.3, got '$version'"; exit 1; }
+          if [[ "$build" == true && "$publish" == true ]]; then
+            [[ "$version" == "$project_version" ]] \
+              || { echo "::error::Tag v$version does not match MARKETING_VERSION $project_version in project.yml"; exit 1; }
+            [[ "$version" == "$cargo_version" ]] \
+              || { echo "::error::core/Cargo.toml has version $cargo_version, expected $version. Use scripts/bump-version.sh"; exit 1; }
+          fi
+          {
+            echo "version=$version"
+            echo "build=$build"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "version=$version build=$build publish=$publish"
+
+  release:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the build number is the commit count
+
+      - name: Select Xcode
+        run: |
+          xcode="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select --switch "$xcode"
+          xcodebuild -version
+
+      - name: Install tools
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          brew install xcodegen
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            core/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('core/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Import signing certificate
+        env:
+          DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password="$(openssl rand -base64 24)"
+          printf '%s' "$DEVELOPER_ID_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -f pkcs12 \
+            -P "$DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/developer-id.p12"
+          security find-identity -v -p codesigning "$keychain"
+
+      - name: Write notarization key
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          printf '%s' "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary-key.p8"
+          echo "NOTARY_KEY=$RUNNER_TEMP/notary-key.p8" >> "$GITHUB_ENV"
+
+      - name: Build, sign and notarize
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: scripts/release.sh "$VERSION"
+
+      - name: Publish release
+        if: needs.plan.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Creates the tag on this commit when it does not exist yet (push to main).
+          gh release create "v$VERSION" \
+            "build/release/Tulma-$VERSION-arm64.dmg" \
+            "build/release/Tulma-$VERSION-arm64.dmg.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "Tulma $VERSION" \
+            --generate-notes
+
+      - name: Keep DMG as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tulma-${{ env.VERSION }}-arm64
+          path: build/release/Tulma-*.dmg*
+
+      - name: Clean up secrets
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/notary-key.p8"
